@@ -4,8 +4,12 @@ const express = require("express");
 const ejs = require("ejs");
 const bodyParser = require("body-parser");
 const mongoose = require("mongoose");
-const bcrypt = require("bcrypt");
-const saltRounds = 10;
+//order is important
+//1.
+const session = require('express-session')
+const passport = require("passport");
+//will do salt and hash automa
+const passportLocalMongoose = require("passport-local-mongoose");
 
 const app = express();
 
@@ -15,16 +19,37 @@ app.use(bodyParser.urlencoded({
   extended: true
 }));
 
-mongoose.connect("mongodb://localhost:27017/userDB");
+//2.
+app.use(session({
+  secret: 'Our little secret.',
+  resave: false,
+  saveUninitialized: false
+}));
+
+//3.
+app.use(passport.initialize());
+app.use(passport.session());
+
+mongoose.connect("mongodb://localhost:27017/userDB", {useNewUrlParser: true});
+
+// mongoose.set("useCreateIndex", true);
 
 const userSchema = new mongoose.Schema({
   email: String,
   password: String
 });
 
+userSchema.plugin(passportLocalMongoose);
 
 const User = new mongoose.model("User", userSchema);
 
+//4.
+// use static authenticate method of model in LocalStrategy
+passport.use(User.createStrategy());
+
+// use static serialize and deserialize of model for passport session support
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
 
 app.get("/", function(req, res) {
   res.render("home");
@@ -38,46 +63,53 @@ app.get("/register", function(req, res) {
   res.render("register");
 });
 
+app.get("/secrets", function(req, res){
+  if(req.isAuthenticated()){
+    res.render("secrets");
+  } else {
+    res.redirect("/login");
+  }
+});
+
+//查阅passportjs
+app.get("/logout", function(req, res){
+  req.logout();
+  res.redirect("/");
+})
+
 app.post("/register", function(req, res) {
 
-  bcrypt.hash(req.body.password, saltRounds, function(err, hash) {
-    const newUser = new User({
-      email: req.body.username,
-      password: hash
-    });
-
-    //automatically encrypt when save()
-    newUser.save(function(err) {
-      if (err) {
-        console.log(err);
-      } else {
-        res.render("secrets")
-      }
-    });
-  });
+  // passport-local-mongoose的方法，简化数据库的一系列操作
+  User.register({username: req.body.username}, req.body.password, function(err, user){
+    if(err){
+      console.log(err);
+      res.redirect("/register");
+    }else{
+      passport.authenticate("local")(req, res, function(){
+        res.redirect("/secrets");
+      })
+    }
+  })
 
 });
 
 app.post("/login", function(req, res) {
-  const username = req.body.username;
-  const password = req.body.password;
-  //automatically decrypt when find()
-  User.findOne({
-    email: username
-  }, function(err, foundUser) {
-    if (err) {
+
+  const user = new User({
+    username: req.body.username,
+    password: req.body.password
+  });
+
+//login是passport的方法
+  req.login(user, function(err){
+    if(err){
       console.log(err);
     } else {
-      if (foundUser) {
-        // Load hash from your password DB.
-        bcrypt.compare(password, foundUser.password, function(err, result) {
-          if(result === true){
-            res.render("secrets");
-          }
-        });
-      }
+      passport.authenticate("local")(req, res, function(){
+        res.redirect("/secrets");
+      });
     }
-  });
+  })
 });
 
 
